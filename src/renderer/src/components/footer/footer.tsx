@@ -11,6 +11,8 @@ import { InputGroup } from '@/components/ui/input-group';
 import { footerStyles } from './footer-styles';
 import AIStateIndicator from './ai-state-indicator';
 import { useFooter } from '@/hooks/footer/use-footer';
+import { useWebSocket } from '@/context/websocket-context';
+import { useChatHistory } from '@/context/chat-history-context';
 
 // Type definitions
 interface FooterProps {
@@ -83,6 +85,72 @@ const MessageInput = memo(({
   onCompositionEnd,
 }: MessageInputProps) => {
   const { t } = useTranslation();
+  const wsContext = useWebSocket();
+  const { appendHumanMessage } = useChatHistory();
+
+  const handleAttachFile = () => {
+    // 创建一个隐藏的文件输入元素
+    const fileInput = document.createElement('input');
+    fileInput.type = 'file';
+    fileInput.accept = 'image/*,video/*,audio/*,text/*,.pdf,.doc,.docx';
+    fileInput.multiple = true;
+    
+    fileInput.onchange = async (e) => {
+      const files = (e.target as HTMLInputElement).files;
+      if (files && files.length > 0) {
+        console.log('Selected files:', Array.from(files));
+        
+        try {
+          // 处理文件上传
+          const fileData = await Promise.all(
+            Array.from(files).map(async (file) => {
+              return new Promise<{name: string, data: string, type: string, size: number}>((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = () => {
+                  resolve({
+                    name: file.name,
+                    data: reader.result as string, // base64编码的数据
+                    type: file.type,
+                    size: file.size
+                  });
+                };
+                reader.onerror = reject;
+                reader.readAsDataURL(file);
+              });
+            })
+          );
+
+          console.log('Files processed:', fileData);
+          
+          // 发送附件消息到WebSocket
+          if (wsContext && fileData.length > 0) {
+            // 添加到聊天历史
+            const fileNames = fileData.map(f => f.name).join(', ');
+            appendHumanMessage(`[附件] ${fileNames}`);
+            
+            // 发送到后端
+            wsContext.sendMessage({
+              type: 'text-input-with-attachments',
+              text: `[用户发送了 ${fileData.length} 个附件: ${fileNames}]`,
+              attachments: fileData,
+            });
+            
+            console.log('Attachments sent to server');
+          } else {
+            // 备用显示方式
+            const fileNames = fileData.map(f => f.name).join(', ');
+            alert(`已选择文件: ${fileNames}\n\n正在发送到服务器...`);
+          }
+          
+        } catch (error) {
+          console.error('File processing error:', error);
+          alert('文件处理失败，请重试');
+        }
+      }
+    };
+    
+    fileInput.click();
+  };
 
   return (
     <InputGroup flex={1}>
@@ -90,6 +158,7 @@ const MessageInput = memo(({
         <IconButton
           aria-label="Attach file"
           variant="ghost"
+          onClick={handleAttachFile}
           {...footerStyles.footer.attachButton}
         >
           <BsPaperclip size="24" />
